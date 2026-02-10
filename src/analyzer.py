@@ -3,26 +3,20 @@ from scipy.stats import poisson
 
 class StatisticalEngine:
     def __init__(self, df):
-        """
-        :param df: DataFrame com TODOS os jogos da liga.
-        """
         self.df = df
         self.league_avgs = self._calculate_league_averages()
 
     def _calculate_league_averages(self):
-        """Calcula médias globais da liga para Gols, Escanteios e Cartões."""
         return {
             'home_goals': self.df['gols_mandante'].mean(),
             'away_goals': self.df['gols_visitante'].mean(),
-            'home_corners': self.df['cantos_mandante'].mean(),
-            'away_corners': self.df['cantos_visitante'].mean(),
-            'home_cards': self.df['amarelos_mandante'].mean() + self.df['vermelhos_mandante'].mean(),
-            'away_cards': self.df['amarelos_visitante'].mean() + self.df['vermelhos_visitante'].mean()
+            # Tratamento de erro com .get() para ligas que não têm essas colunas (ex: Brasil)
+            'home_corners': self.df.get('cantos_mandante', self.df['gols_mandante']*0).mean(),
+            'away_corners': self.df.get('cantos_visitante', self.df['gols_visitante']*0).mean(),
         }
 
     def calculate_strength(self, team):
-        """Calcula Força de Ataque e Defesa (Gols)."""
-        # (Código igual ao anterior, mantido para brevidade)
+        # ... (Mantendo a lógica de ataque/defesa igual) ...
         home_games = self.df[self.df['mandante'] == team]
         if home_games.empty: return None
         
@@ -42,41 +36,55 @@ class StatisticalEngine:
 
     def predict_corners_cards(self, home_team, away_team):
         """
-        (NOVO - ITEM 3.3) Prevê Escanteios e Cartões usando médias cruzadas.
-        Lógica: (Média Favor Mandante + Média Contra Visitante) / 2
+        CORRIGIDO: Calcula Escanteios e Cartões cruzando Ataque x Defesa.
         """
-        # Filtrar jogos (Home Team em casa e Away Team fora)
         h_games = self.df[self.df['mandante'] == home_team]
         a_games = self.df[self.df['visitante'] == away_team]
         
-        if h_games.empty or a_games.empty: return None
+        if h_games.empty or a_games.empty: 
+            return {'exp_corners_home': 0, 'exp_corners_away': 0, 'exp_corners_total': 0, 
+                    'exp_cards_home': 0, 'exp_cards_away': 0, 'exp_cards_total': 0}
 
-        # --- ESCANTEIOS ---
-        # Quantos cantos o Mandante costuma ter? vs Quantos o Visitante costuma ceder?
-        exp_home_corners = (h_games['cantos_mandante'].mean() + a_games['cantos_visitante'].mean()) / 2
-        # Quantos cantos o Visitante costuma ter? vs Quantos o Mandante costuma ceder?
-        exp_away_corners = (a_games['cantos_visitante'].mean() + h_games['cantos_mandante'].mean()) / 2
+        # --- ESCANTEIOS (CANTOS) ---
+        # Média que o Mandante faz em casa
+        avg_corners_h_for = h_games.get('cantos_mandante', h_games['gols_mandante']*0).mean()
+        # Média que o Visitante SOFRE fora (são os cantos do mandante adversário)
+        avg_corners_a_against = a_games.get('cantos_mandante', a_games['gols_mandante']*0).mean()
+        
+        # Expectativa Casa: Média entre o que ele faz e o que o adversário sofre
+        exp_home_corners = (avg_corners_h_for + avg_corners_a_against) / 2
+        
+        # Média que o Visitante faz fora
+        avg_corners_a_for = a_games.get('cantos_visitante', a_games['gols_visitante']*0).mean()
+        # Média que o Mandante SOFRE em casa
+        avg_corners_h_against = h_games.get('cantos_visitante', h_games['gols_visitante']*0).mean()
+        
+        exp_away_corners = (avg_corners_a_for + avg_corners_h_against) / 2
         
         total_corners = exp_home_corners + exp_away_corners
 
-        # --- CARTÕES (Amarelos + Vermelhos) ---
-        # Cartões do Mandante + Cartões do Visitante (agressividade dos dois)
-        # Aqui somamos as médias de cartões recebidos por ambos
-        h_cards = h_games['amarelos_mandante'].mean() + h_games['vermelhos_mandante'].mean()
-        a_cards = a_games['amarelos_visitante'].mean() + a_games['vermelhos_visitante'].mean()
+        # --- CARTÕES (NOVO: Lógica detalhada) ---
+        # Cartões que o Mandante recebe em casa
+        cards_h = h_games.get('amarelos_mandante', h_games['gols_mandante']*0).mean() + \
+                  h_games.get('vermelhos_mandante', h_games['gols_mandante']*0).mean()
         
-        total_cards = h_cards + a_cards
+        # Cartões que o Visitante recebe fora
+        cards_a = a_games.get('amarelos_visitante', a_games['gols_visitante']*0).mean() + \
+                  a_games.get('vermelhos_visitante', a_games['gols_visitante']*0).mean()
+
+        total_cards = cards_h + cards_a
 
         return {
             'exp_corners_home': round(exp_home_corners, 2),
             'exp_corners_away': round(exp_away_corners, 2),
             'exp_corners_total': round(total_corners, 2),
+            'exp_cards_home': round(cards_h, 2), # Adicionado individual
+            'exp_cards_away': round(cards_a, 2), # Adicionado individual
             'exp_cards_total': round(total_cards, 2)
         }
 
     def predict_match(self, home_team, away_team):
-        """Gera todas as previsões (Gols + Secundárias)."""
-        # 1. Previsão de Gols (Poisson) - Lógica Anterior
+        # ... (Mantém igual, só garante que chama a função nova) ...
         home_stats = self.calculate_strength(home_team)
         away_stats = self.calculate_strength(away_team)
         
@@ -94,7 +102,6 @@ class StatisticalEngine:
         prob_draw = np.sum(np.diag(probs))
         prob_away_win = np.sum(np.triu(probs, 1))
 
-        # 2. Previsão Secundária (Chamada da nova função)
         secondary = self.predict_corners_cards(home_team, away_team)
 
         return {
@@ -105,32 +112,5 @@ class StatisticalEngine:
             'prob_draw': round(prob_draw * 100, 1),
             'prob_away': round(prob_away_win * 100, 1),
             'score_matrix': probs,
-            # Adicionamos os dados secundários ao retorno principal
             'secondary_metrics': secondary 
         }
-
-# --- Bloco de Teste ---
-if __name__ == "__main__":
-    from processor import DataProcessor
-    
-    # Setup
-    proc = DataProcessor()
-    df = proc.df
-    engine = StatisticalEngine(df)
-    
-    # Teste Completo
-    print("\n🔮 Análise Completa: Liverpool vs Luton")
-    prediction = engine.predict_match("Liverpool", "Luton")
-    
-    # 1. Gols e Probabilidades (O que você sentiu falta)
-    print(f"Gols Esperados: {prediction['lambda_home']} x {prediction['lambda_away']}")
-    print("-" * 30)
-    print(f"Probabilidade Casa:    {prediction['prob_home']}%")
-    print(f"Probabilidade Empate:  {prediction['prob_draw']}%")
-    print(f"Probabilidade Fora:    {prediction['prob_away']}%")
-    print("-" * 30)
-
-    # 2. Métricas Secundárias (Novo)
-    sec = prediction['secondary_metrics']
-    print(f"Escanteios Esperados:  {sec['exp_corners_total']} (Média Casa: {sec['exp_corners_home']})")
-    print(f"Cartões Esperados:     {sec['exp_cards_total']}")
